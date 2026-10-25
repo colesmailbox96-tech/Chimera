@@ -1,0 +1,14 @@
+{
+  "schema":"icarus.scheduler.checkpoint.v1",
+  "sequence":0,
+  "active_provider":"vercel_browser",
+  "last_verified_gate":"3-cycle acceptance pass",
+  "runtime":"WASM",
+  "base_model":"onnx-community/SmolLM2-360M-Instruct-ONNX",
+  "next_gate":"10-cycle long-horizon continuity",
+  "policy":{
+    "respect_provider_limits":true,
+    "quota_evasion":false,
+    "checkpoint_before_handoff":true
+  }
+}
