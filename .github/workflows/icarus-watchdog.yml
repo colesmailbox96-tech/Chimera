@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: icarus-provider-watchdog
@@ -18,5 +19,35 @@ jobs:
     timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
-      - name: Check active Icarus runtime
+
+      - id: check
+        name: Check active Icarus runtime
+        continue-on-error: true
         run: python watchdog.py
+
+      - name: Open or update incident
+        if: steps.check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search '"Icarus Watchdog Incident" in:title' --json number --jq '.[0].number // empty')"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body-file watchdog-result.json
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Icarus Watchdog Incident" --body-file watchdog-result.json
+          fi
+
+      - name: Close recovered incident
+        if: steps.check.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search '"Icarus Watchdog Incident" in:title' --json number --jq '.[0].number // empty')"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "Recovered: all Icarus production health gates are passing."
+            gh issue close "$issue" --repo "$GITHUB_REPOSITORY"
+          fi
+
+      - name: Fail unhealthy run
+        if: steps.check.outcome == 'failure'
+        run: exit 1
