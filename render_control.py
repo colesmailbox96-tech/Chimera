@@ -1,15 +1,16 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
-import json, os, time, hashlib, threading
+import json, os, time, hashlib, threading, hmac
 
 PORT=int(os.environ.get("PORT","10000"))
+CONTROL_TOKEN=os.environ.get("ICARUS_CONTROL_TOKEN","")
 LOCK=threading.Lock()
 STATE={
  "schema":"icarus.provider.scheduler.v1.1",
  "active_provider":"vercel_browser",
  "providers":{
-  "vercel_browser":{"status":"healthy","score":100,"cost":"free","role":"browser inference + evidence API"},
-  "render":{"status":"standby","score":85,"cost":"free","role":"control-plane standby",
+  "vercel_browser":{"status":"unverified","score":100,"cost":"free","role":"browser inference + evidence API","workload_eligible":True},
+  "render":{"status":"standby","score":85,"cost":"free","role":"control-plane standby","workload_eligible":False,
             "limits":{"memory_bytes":536870912,"monthly_free_instance_hours":750,"idle_spin_down_seconds":900}},
   "railway":{"status":"connector_unavailable","score":0,"cost":"unknown","role":"candidate"}
  },
@@ -32,7 +33,7 @@ def digest(x):
  return hashlib.sha256(json.dumps(x,sort_keys=True,separators=(",",":")).encode()).hexdigest()
 
 def eligible(name,p):
- return p.get("status") in ("healthy","standby") and p.get("score",0)>0
+ return p.get("workload_eligible",False) and p.get("status") in ("healthy","standby") and p.get("score",0)>0
 
 def recommended(exclude=None):
  choices=[]
@@ -77,7 +78,12 @@ class Handler(BaseHTTPRequestHandler):
   return self._json(404,{"ok":False,"error":"not_found"})
 
  def do_POST(self):
-  path=urlparse(self.path).path; body=self._body()
+  path=urlparse(self.path).path
+  if not CONTROL_TOKEN: return self._json(503,{"ok":False,"error":"writes_disabled_unconfigured"})
+  supplied=self.headers.get("Authorization","")
+  if not hmac.compare_digest(supplied,"Bearer "+CONTROL_TOKEN):
+   return self._json(401,{"ok":False,"error":"unauthorized"})
+  body=self._body()
   if body is None:return self._json(400,{"ok":False,"error":"bad_json"})
 
   if path=="/heartbeat":
@@ -111,6 +117,8 @@ class Handler(BaseHTTPRequestHandler):
   if path=="/checkpoint":
    receipt=body.get("receipt")
    if not isinstance(receipt,dict):return self._json(400,{"ok":False,"error":"receipt_required"})
+   if not isinstance(receipt.get("artifact_sha256"),str) or len(receipt["artifact_sha256"])!=64 or not receipt.get("durable_artifact_uri"):
+    return self._json(400,{"ok":False,"error":"durable_checkpoint_artifact_required"})
    with LOCK:
     STATE["checkpoint_seq"]+=1
     payload={"seq":STATE["checkpoint_seq"],"previous":STATE["last_checkpoint_hash"],"receipt":receipt,"time":time.time()}
